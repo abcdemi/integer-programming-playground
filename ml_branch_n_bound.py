@@ -8,7 +8,7 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # =============================================================================
-# PART 1 & 2: MODELS AND STRATEGIES (Unchanged)
+# PART 1 & 2: MODELS AND STRATEGIES
 # =============================================================================
 class SimulatedGCN:
     def __init__(self, feature_size=5, embedding_size=16):
@@ -46,7 +46,7 @@ def select_gcn_predicted_variable(candidates, solution, c_min, A_ub, b_ub, gcn_m
     candidate_scores = {idx: all_scores[idx] for idx in candidates}; return max(candidate_scores, key=candidate_scores.get)
 
 # =============================================================================
-# PART 3: CORE SOLVER & PROBLEM GENERATOR (Unchanged)
+# PART 3: CORE SOLVER & PROBLEM GENERATOR
 # =============================================================================
 def branch_and_bound_solver(c, A_ub, b_ub, branching_strategy, gcn_model=None):
     c_min, num_vars = -np.array(c), len(c)
@@ -82,7 +82,7 @@ def generate_multi_constraint_ip(num_vars, num_cons, seed):
     return c, A, b
 
 # =============================================================================
-# PART 4: EXPERIMENT RUNNER AND ANALYSIS (UPDATED)
+# PART 4: EXPERIMENT RUNNER AND ANALYSIS
 # =============================================================================
 if __name__ == '__main__':
     NUM_PROBLEMS = 5
