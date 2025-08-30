@@ -1,75 +1,76 @@
 import numpy as np
 from scipy.optimize import linprog
-import joblib  # A common library for saving and loading sklearn models
+import time
+import pandas as pd
+import random
 
-# --- ML Model Placeholder ---
-# In a real scenario, you would load a pre-trained model.
-# For this example, we'll simulate a model and a feature extractor.
+# =============================================================================
+# PART 1: SIMULATED ML MODEL AND BRANCHING STRATEGIES
+# =============================================================================
 
-def extract_features(problem_state, fractional_vars_indices):
+class SimulatedBranchingModel:
     """
-    Extracts features for the ML model from the current problem state
-    for each fractional variable.
-
-    In a real implementation, this would be much more sophisticated.
+    A simulated ML model that mimics a learned policy.
+    POLICY: Give a higher score to variables with a larger objective coefficient.
+    This simulates the model learning that "high-profit" items are more
+    impactful to make decisions on first.
     """
-    features = []
-    for var_index in fractional_vars_indices:
-        # Example features: the fractional value itself and its objective coefficient
-        frac_value = problem_state['solution'][var_index]
-        obj_coeff = -problem_state['c'][var_index] # Use negative because linprog minimizes
-        features.append([frac_value, obj_coeff])
-    return np.array(features)
-
-def ml_predict_branching_variable(model, features, fractional_vars_indices):
-    """
-    Uses the trained ML model to predict the best variable to branch on.
-    """
-    # The model predicts a score for each variable. We choose the one with the highest score.
-    predictions = model.predict(features)
-    best_var_index = np.argmax(predictions)
-    return fractional_vars_indices[best_var_index]
-
-# Simulate a simple pre-trained model (e.g., a linear regression or a small neural network)
-# This model has learned that variables with higher objective coefficients are generally better to branch on.
-class SimpleBranchingModel:
     def predict(self, features):
-        # features[:, 1] corresponds to the objective coefficient
-        return features[:, 1]
+        # features is a list of [fractional_value, objective_coefficient]
+        # We return the objective_coefficient as the "score".
+        scores = [f[1] for f in features]
+        return np.array(scores)
 
-# Let's pretend we've trained and saved this model.
-# In a real application, you would load it like this:
-# ml_model = joblib.load('branching_model.pkl')
-ml_model = SimpleBranchingModel()
+def select_most_fractional_variable(candidates, solution, **kwargs):
+    """CONTROL GROUP: Standard 'most fractional' branching heuristic."""
+    # Find the variable closest to 0.5
+    fractional_parts = [abs(solution[idx] - 0.5) for idx in candidates]
+    return candidates[np.argmin(fractional_parts)]
+
+def select_ml_predicted_variable(candidates, solution, objective_coeffs, model):
+    """EXPERIMENTAL GROUP: Branching heuristic guided by the simulated ML model."""
+    # 1. Extract features for each candidate variable
+    features = []
+    for idx in candidates:
+        frac_value = solution[idx]
+        obj_coeff = objective_coeffs[idx]
+        features.append([frac_value, obj_coeff])
+
+    # 2. Get "predictions" (scores) from the model
+    scores = model.predict(features)
+
+    # 3. Choose the variable with the highest score
+    best_candidate_index = np.argmax(scores)
+    return candidates[best_candidate_index]
 
 
-# --- Branch and Bound Algorithm ---
+# =============================================================================
+# PART 2: THE CORE BRANCH AND BOUND SOLVER
+# =============================================================================
 
-def solve_lp_relaxation(c, A_ub, b_ub, bounds):
-    """Solves the linear programming relaxation of the current subproblem."""
-    res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
-    return res
-
-def branch_and_bound_with_ml(c, A_ub, b_ub, bounds):
+def branch_and_bound_solver(c, A_ub, b_ub, branching_strategy, ml_model=None):
     """
-    A simplified Branch and Bound solver that uses an ML model for variable selection.
+    A flexible B&B solver that accepts a branching strategy as an argument.
     """
     # We are maximizing, so we convert the objective for scipy's minimizer
     c_min = -np.array(c)
+    num_vars = len(c)
     
-    # Initial problem setup
     best_integer_solution = None
     best_obj_value = -np.inf
+    nodes_explored = 0
     
-    # Stack for nodes to explore (subproblems)
-    # A node is defined by its variable bounds
-    stack = [(bounds)]
+    # Stack for nodes to explore. A node is defined by its variable bounds.
+    # Bounds are tuples of (min, max) for each variable.
+    initial_bounds = tuple([(0, 1) for _ in range(num_vars)])
+    stack = [(initial_bounds)]
 
     while stack:
         current_bounds = stack.pop()
+        nodes_explored += 1
         
-        # 1. Solve the LP relaxation for the current node
-        res = solve_lp_relaxation(c_min, A_ub, b_ub, current_bounds)
+        # 1. Solve the LP relaxation
+        res = linprog(c_min, A_ub=A_ub, b_ub=b_ub, bounds=list(current_bounds), method='highs')
 
         # 2. Fathom (Prune) the node if it's not promising
         if not res.success or -res.fun <= best_obj_value:
@@ -85,54 +86,137 @@ def branch_and_bound_with_ml(c, A_ub, b_ub, bounds):
             if current_obj > best_obj_value:
                 best_obj_value = current_obj
                 best_integer_solution = solution
-            continue # This branch is done
+            continue
 
         # 4. Branching Step: Select a fractional variable to branch on
         fractional_indices = [i for i, val in enumerate(solution) if not np.isclose(val, np.round(val))]
 
-        # --- ML ACCELERATION HAPPENS HERE ---
-        problem_state = {'solution': solution, 'c': c_min}
-        features = extract_features(problem_state, fractional_indices)
-        
-        # Use the ML model to choose the variable
-        branch_var_index = ml_predict_branching_variable(ml_model, features, fractional_indices)
-        # --- END OF ML INTEGRATION ---
+        if not fractional_indices:
+            continue
+            
+        # --- HERE THE BRANCHING STRATEGY IS CALLED ---
+        strategy_kwargs = {
+            'candidates': fractional_indices,
+            'solution': solution,
+            'objective_coeffs': c,
+            'model': ml_model
+        }
+        branch_var_index = branching_strategy(**strategy_kwargs)
+        # ---
 
-        # Create two new subproblems (nodes) by adding new bounds
+        # 5. Create two new subproblems (nodes)
         val = solution[branch_var_index]
         
-        # New problem 1: var <= floor(val)
+        # New problem 1: var <= 0
         new_bounds1 = list(current_bounds)
-        new_bounds1[branch_var_index] = (current_bounds[branch_var_index][0], np.floor(val))
+        new_bounds1[branch_var_index] = (0, 0)
         stack.append(tuple(new_bounds1))
         
-        # New problem 2: var >= ceil(val)
+        # New problem 2: var >= 1
         new_bounds2 = list(current_bounds)
-        new_bounds2[branch_var_index] = (np.ceil(val), current_bounds[branch_var_index][1])
+        new_bounds2[branch_var_index] = (1, 1)
         stack.append(tuple(new_bounds2))
 
-    return best_integer_solution, best_obj_value
+    return best_obj_value, nodes_explored
+
+
+# =============================================================================
+# PART 3: PROBLEM GENERATOR
+# =============================================================================
+
+def generate_knapsack_problem(num_items):
+    """Generates a random 0-1 Knapsack Problem."""
+    values = np.random.randint(10, 100, size=num_items)  # Objective coefficients
+    weights = np.random.randint(5, 50, size=num_items)   # Constraint coefficients
+    capacity = int(np.sum(weights) * 0.6)              # Knapsack capacity
+    
+    # Standard form: max c*x s.t. A*x <= b
+    c = values
+    A_ub = [weights]
+    b_ub = [capacity]
+    
+    return c, A_ub, b_ub
+
+
+# =============================================================================
+# PART 4: EXPERIMENT RUNNER AND ANALYSIS
+# =============================================================================
 
 if __name__ == '__main__':
-    # Solve a simple integer programming problem:
-    # Maximize: 5*x1 + 8*x2
-    # Subject to:
-    #   x1 + x2 <= 6
-    #   5*x1 + 9*x2 <= 45
-    #   x1, x2 >= 0 and are integers
-    
-    c = [5, 8]
-    A = [[1, 1], [5, 9]]
-    b = [6, 45]
-    bounds = [(0, None), (0, None)]
+    print("Designing and running a self-contained experiment...")
+    print("Objective: Compare a simulated ML branching model vs. a standard heuristic.\n")
 
-    print("Solving with ML-accelerated Branch and Bound...")
-    solution, value = branch_and_bound_with_ml(c, A, b, bounds)
+    # --- Experiment Parameters ---
+    NUM_PROBLEMS_TO_RUN = 20
+    NUM_ITEMS_PER_PROBLEM = 30
     
-    print("\nOptimal Solution:")
-    if solution is not None:
-        print(f"  x1 = {solution[0]}")
-        print(f"  x2 = {solution[1]}")
-        print(f"Optimal Value = {value}")
+    # Instantiate our simulated ML model
+    simulated_ml_model = SimulatedBranchingModel()
+    
+    experiment_results = []
+
+    for i in range(NUM_PROBLEMS_TO_RUN):
+        print(f"--- Running on randomly generated problem #{i+1} ---")
+        
+        # Generate a new, unique problem for a fair comparison
+        c, A_ub, b_ub = generate_knapsack_problem(NUM_ITEMS_PER_PROBLEM)
+
+        # Run Control Group
+        start_time_control = time.time()
+        obj_control, nodes_control = branch_and_bound_solver(c, A_ub, b_ub, select_most_fractional_variable)
+        time_control = time.time() - start_time_control
+        
+        # Run Experimental Group
+        start_time_ml = time.time()
+        obj_ml, nodes_ml = branch_and_bound_solver(c, A_ub, b_ub, select_ml_predicted_variable, ml_model=simulated_ml_model)
+        time_ml = time.time() - start_time_ml
+        
+        # Store results
+        experiment_results.append({
+            'ProblemID': i + 1,
+            'Control_Nodes': nodes_control,
+            'ML_Nodes': nodes_ml,
+            'Control_Time_s': time_control,
+            'ML_Time_s': time_ml,
+            'OptimalValue': obj_control
+        })
+
+    # --- Analyze and Display Results ---
+    df = pd.DataFrame(experiment_results)
+    
+    # Calculate winner for each run based on node count
+    df['Winner'] = np.where(df['ML_Nodes'] < df['Control_Nodes'], 'ML Model',
+                           np.where(df['ML_Nodes'] > df['Control_Nodes'], 'Control', 'Tie'))
+
+    print("\n\n" + "="*50)
+    print("               EXPERIMENT RESULTS")
+    print("="*50)
+    print(df[['ProblemID', 'Control_Nodes', 'ML_Nodes', 'Winner']].to_string(index=False))
+    print("-"*50)
+
+    # Summary Statistics
+    avg_nodes_control = df['Control_Nodes'].mean()
+    avg_nodes_ml = df['ML_Nodes'].mean()
+    
+    ml_wins = (df['Winner'] == 'ML Model').sum()
+    control_wins = (df['Winner'] == 'Control').sum()
+    ties = (df['Winner'] == 'Tie').sum()
+
+    print("\n--- SUMMARY STATISTICS ---")
+    print(f"Average Nodes (Control Heuristic): {avg_nodes_control:.2f}")
+    print(f"Average Nodes (Simulated ML Model): {avg_nodes_ml:.2f}\n")
+    
+    print(f"Total Wins for ML Model: {ml_wins} / {NUM_PROBLEMS_TO_RUN}")
+    print(f"Total Wins for Control: {control_wins} / {NUM_PROBLEMS_TO_RUN}")
+    print(f"Ties: {ties} / {NUM_PROBLEMS_TO_RUN}\n")
+
+    # Conclusion
+    node_reduction = (avg_nodes_control - avg_nodes_ml) / avg_nodes_control * 100
+    print("--- CONCLUSION ---")
+    if avg_nodes_ml < avg_nodes_control:
+        print(f"The experiment supports the hypothesis (H1).")
+        print(f"The simulated ML model reduced the average number of explored nodes by {node_reduction:.2f}%,")
+        print("demonstrating that a learned, context-aware policy can be more efficient than a generic one.")
     else:
-        print("No integer solution found.")
+        print("The experiment does not support the hypothesis (H0).")
+        print("There was no significant performance improvement from the simulated ML model.")
