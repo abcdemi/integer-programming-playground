@@ -54,8 +54,8 @@ def select_strong_branching_variable(candidates, c_min, A_ub, b_ub, current_boun
     for idx in candidates:
         bounds_down, bounds_up = list(current_bounds), list(current_bounds)
         bounds_down[idx], bounds_up[idx] = (0, 0), (1, 1)
-        res_down = linprog(c_min, A_ub, b_ub, bounds_down, method='highs')
-        res_up = linprog(c_min, A_ub, b_ub, bounds_up, method='highs')
+        res_down = linprog(c_min, A_ub=A_ub, b_ub=b_ub, bounds=bounds_down, method='highs')
+        res_up = linprog(c_min, A_ub=A_ub, b_ub=b_ub, bounds=bounds_up, method='highs')
         obj_down = -res_down.fun if res_down.success else -np.inf
         obj_up = -res_up.fun if res_up.success else -np.inf
         score = min(obj_down, obj_up)
@@ -69,31 +69,30 @@ def select_gcn_predicted_variable(candidates, solution, c_min, A_ub, b_ub, gcn_m
     num_cons = len(b_ub)
     
     # 1. Build Graph Representation
-    # Adjacency matrix: 1 if var j is in constraint i
     adj_matrix = (A_ub != 0).astype(float)
 
-    # Feature Engineering (simplified)
+    # 2. Feature Engineering (simplified)
     var_features = np.zeros((num_vars, 5))
-    var_features[:, 0] = -c_min  # Objective coefficient
-    var_features[:, 1] = solution # Current LP solution value
-    var_features[:, 2] = np.isclose(solution, 0) # Is at lower bound
-    var_features[:, 3] = np.isclose(solution, 1) # Is at upper bound
-    var_features[:, 4] = [i in candidates for i in range(num_vars)] # Is fractional
+    var_features[:, 0] = -c_min
+    var_features[:, 1] = solution
+    var_features[:, 2] = np.isclose(solution, 0)
+    var_features[:, 3] = np.isclose(solution, 1)
+    var_features[:, 4] = [i in candidates for i in range(num_vars)]
 
     cons_features = np.zeros((num_cons, 5))
     slack = b_ub - (A_ub @ solution)
-    cons_features[:, 0] = slack # Slack value of constraint
-    cons_features[:, 1] = np.isclose(slack, 0) # Is tight
+    cons_features[:, 0] = slack
+    cons_features[:, 1] = np.isclose(slack, 0)
     
-    # 2. Get predictions from the GCN model
+    # 3. Get predictions from the GCN model
     all_scores = gcn_model.predict(var_features, cons_features, adj_matrix)
     
-    # 3. Choose the candidate with the highest score
+    # 4. Choose the candidate with the highest score
     candidate_scores = {idx: all_scores[idx] for idx in candidates}
     return max(candidate_scores, key=candidate_scores.get)
 
 # =============================================================================
-# PART 3: THE CORE SOLVER & PROBLEM GENERATOR (Unchanged)
+# PART 3: THE CORE SOLVER & PROBLEM GENERATOR
 # =============================================================================
 
 def branch_and_bound_solver(c, A_ub, b_ub, branching_strategy, gcn_model=None):
@@ -125,11 +124,16 @@ def branch_and_bound_solver(c, A_ub, b_ub, branching_strategy, gcn_model=None):
     return best_obj_value, nodes_explored
 
 def generate_knapsack_problem(num_items, seed):
+    """Generates a random 0-1 Knapsack Problem."""
     np.random.seed(seed)
     c = np.random.randint(10, 100, size=num_items)
     A = np.random.randint(5, 50, size=num_items)
     b = [int(np.sum(A) * 0.6)]
-    return c, np.array([A]), b
+    
+    # --- FIX WAS APPLIED HERE ---
+    # Return b_ub as a 1D NumPy array instead of a list to ensure
+    # compatibility with SciPy's linprog function.
+    return c, np.array([A]), np.array(b)
 
 # =============================================================================
 # PART 4: EXPERIMENT RUNNER AND ANALYSIS
