@@ -1,68 +1,50 @@
 import os
 import pickle
-# ADD THIS IMPORT
-from pyscipopt import Model, Branchrule, SCIP_RESULT, SCIP_PARAMSETTING
+from pyscipopt import Model
 
-training_data = []
-
-class ExpertBranchingRecorder(Branchrule):
-    def __init__(self, model_vars):
-        self.model_vars = model_vars
-
-    def branchexeclp(self):
-        # ... (The rest of this class stays exactly the same)
-        candidates, _, _, _, _ = self.model.getLPBranchCands()
-        if not candidates:
-            return {'result': SCIP_RESULT.DIDNOTRUN}
-        _, _, _, best_cand_idx = self.model.getStrongbranchs(candidates)
-        expert_choice_var = candidates[best_cand_idx]
-        expert_label = -1
-        for i, var in enumerate(self.model_vars):
-            if var.name == expert_choice_var.name:
-                expert_label = i
-                break
-        if expert_label != -1:
-            lp_solution_values = [self.model.getVal(var) for var in self.model_vars]
-            training_data.append((lp_solution_values, expert_label))
-        return {'result': SCIP_RESULT.DIDNOTRUN}
-
-
-def process_instance(instance_file):
+def solve_and_save_solution(instance_file, solution_dir):
+    """Solves a knapsack instance and saves the optimal solution."""
     with open(instance_file, 'rb') as f:
         instance = pickle.load(f)
     
     model = Model("knapsack")
     model.hideOutput()
-
-    # --- ADD THESE CRITICAL LINES TO DISABLE ADVANCED FEATURES ---
-    print(f"Processing {instance_file} with SCIP (advanced features OFF)...")
-    # Turn off all presolving routines
-    model.setPresolve(SCIP_PARAMSETTING.OFF)
-    # Turn off all heuristics
-    model.setHeuristics(SCIP_PARAMSETTING.OFF)
-    # Turn off all cutting plane separators
-    model.setSeparating(SCIP_PARAMSETTING.OFF)
-    # -----------------------------------------------------------
     
-    x = {i: model.addVar(vtype="B", name=f"x_{i}") for i in range(instance['num_items'])}
-    model.setObjective(sum(instance['values'][i] * x[i] for i in range(instance['num_items'])), "maximize")
-    model.addCons(sum(instance['weights'][i] * x[i] for i in range(instance['num_items'])) <= instance['capacity'])
+    num_items = instance['num_items']
+    x = {i: model.addVar(vtype="B", name=f"x_{i}") for i in range(num_items)}
     
-    model_vars_list = [x[i] for i in range(instance['num_items'])]
-    recorder = ExpertBranchingRecorder(model_vars_list)
-    model.includeBranchrule(recorder, "ExpertRecorder", "Records strong branching", 999999, -1, 1)
+    model.setObjective(sum(instance['values'][i] * x[i] for i in range(num_items)), "maximize")
+    model.addCons(sum(instance['weights'][i] * x[i] for i in range(num_items)) <= instance['capacity'])
     
     model.optimize()
+    
+    # Check if an optimal solution was found
+    if model.getStatus() == "optimal":
+        solution = [round(model.getVal(x[i])) for i in range(num_items)]
+        
+        # Save the solution
+        solution_filepath = os.path.join(solution_dir, os.path.basename(instance_file))
+        with open(solution_filepath, 'wb') as f:
+            pickle.dump({
+                'instance': instance,
+                'solution': solution
+            }, f)
+        print(f"  -> Solved and saved solution for {os.path.basename(instance_file)}")
+    else:
+        print(f"  -> No optimal solution found for {os.path.basename(instance_file)}")
 
-# --- Main execution block (no changes here) ---
+
 if __name__ == '__main__':
     DATASET_DIR = 'knapsack_dataset'
+    SOLUTION_DIR = 'knapsack_solutions'
+    
+    if not os.path.exists(SOLUTION_DIR):
+        os.makedirs(SOLUTION_DIR)
+        
     instance_files = [os.path.join(DATASET_DIR, f) for f in os.listdir(DATASET_DIR)]
     
+    print(f"Processing {len(instance_files)} instances to collect optimal solutions...")
     for filename in instance_files:
-        process_instance(filename)
+        solve_and_save_solution(filename, SOLUTION_DIR)
             
-    with open('expert_branching_data_scip.pkl', 'wb') as f:
-        pickle.dump(training_data, f)
-            
-    print(f"\nCollected a total of {len(training_data)} training samples using SCIP.")
+    print(f"\nFinished collecting solutions. Data is in '{SOLUTION_DIR}'.")
