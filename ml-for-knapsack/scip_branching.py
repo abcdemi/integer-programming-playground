@@ -18,11 +18,9 @@ def solve_and_save_solution(instance_file, solution_dir):
     
     model.optimize()
     
-    # Check if an optimal solution was found
     if model.getStatus() == "optimal":
         solution = [round(model.getVal(x[i])) for i in range(num_items)]
         
-        # Save the solution
         solution_filepath = os.path.join(solution_dir, os.path.basename(instance_file))
         with open(solution_filepath, 'wb') as f:
             pickle.dump({
