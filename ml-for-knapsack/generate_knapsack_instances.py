@@ -47,7 +47,7 @@ def generate_knapsack_instance(num_items, correlation_type='uncorrelated'):
 # --- Main script to generate the dataset ---
 if __name__ == '__main__':
     NUM_INSTANCES = 1000  # Generate 1000 problems
-    NUM_ITEMS = 50       # Each with 50 items
+    NUM_ITEMS = 500       # Each with 50 items
     DATASET_DIR = 'knapsack_dataset'
     
     if not os.path.exists(DATASET_DIR):
