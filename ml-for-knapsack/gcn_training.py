@@ -3,7 +3,9 @@ import pickle
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.data import Data
+# The warning told us to use this new import path
+from torch_geometric.loader import DataLoader
 
 # --- GCN Model Definition (same as before) ---
 class GCN(torch.nn.Module):
@@ -24,9 +26,8 @@ def instance_to_graph(instance, solution):
     weights, values, capacity = instance['weights'], instance['values'], instance['capacity']
     num_items = len(weights)
     
-    # Node features are just the item's static properties now
     node_features = torch.tensor([
-        [weights[i], values[i], values[i] / weights[i]] for i in range(num_items)
+        [weights[i], values[i], values[i] / (weights[i] + 1e-6)] for i in range(num_items)
     ], dtype=torch.float)
 
     edge_list = []
@@ -35,9 +36,16 @@ def instance_to_graph(instance, solution):
             if weights[i] + weights[j] > capacity:
                 edge_list.extend([[i, j], [j, i]])
     
+    # --- THIS IS THE FIX FOR THE BUG YOU FOUND ---
+    # If the graph has no edges, we cannot process it.
+    # We return None and skip this instance.
+    if not edge_list:
+        print(f"  -> Skipping an instance because it generated a graph with no edges.")
+        return None
+    # ---------------------------------------------
+    
     edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
     
-    # The label is the final solution (0s and 1s)
     labels = torch.tensor(solution, dtype=torch.float)
     
     return Data(x=node_features, edge_index=edge_index, y=labels)
@@ -51,19 +59,23 @@ if __name__ == '__main__':
     for sol_file in solution_files:
         with open(sol_file, 'rb') as f:
             data = pickle.load(f)
+        
+        # The graph function might return None, so we check for it
         graph = instance_to_graph(data['instance'], data['solution'])
-        pyg_dataset.append(graph)
+        if graph is not None:
+            pyg_dataset.append(graph)
+    
+    print(f"\nSuccessfully created {len(pyg_dataset)} graph instances for training.")
     
     train_loader = DataLoader(pyg_dataset, batch_size=16, shuffle=True)
     
     model = GCN(num_node_features=3)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    # Binary Cross Entropy is the right loss for predicting 0s and 1s
     criterion = torch.nn.BCEWithLogitsLoss()
 
     print("Starting GCN training...")
     model.train()
-    for epoch in range(10): # More epochs for better results
+    for epoch in range(10):
         total_loss = 0
         for batch in train_loader:
             optimizer.zero_grad()
@@ -74,6 +86,5 @@ if __name__ == '__main__':
             total_loss += loss.item()
         print(f"Epoch {epoch+1}, Loss: {total_loss / len(train_loader):.4f}")
 
-    # Save the trained model's weights
     torch.save(model.state_dict(), 'gcn_knapsack_model_v2.pth')
     print("Training finished. Model saved to gcn_knapsack_model_v2.pth")
