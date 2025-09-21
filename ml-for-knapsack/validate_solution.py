@@ -1,18 +1,27 @@
 import pickle
-from pyscipopt import Model
+from pyscipopt import Model, SCIP_PARAMSETTING
+import torch
 
-def get_scip_optimal_solution(instance_file):
+from gcn_solver import GCN, gcn_guided_solve
+
+def get_scip_baseline_solution(instance_file):
     """
-    Solves a single knapsack instance with SCIP to find the ground truth
-    optimal value.
+    Solves a knapsack instance with a basic SCIP B&B search to get a
+    baseline node count for comparison.
     """
     with open(instance_file, 'rb') as f:
         instance = pickle.load(f)
     
-    # Set up the SCIP model. We are NOT disabling any features this time.
-    # We want SCIP to use its full power to solve this as fast as possible.
     model = Model("KnapsackValidator")
-    model.hideOutput() # We only care about the final result
+    model.hideOutput()
+    
+    # --- ADDED: Make the comparison fair by disabling SCIP's advanced features ---
+    # This forces SCIP to perform a more traditional Branch and Bound search,
+    # similar to our custom solver.
+    model.setPresolve(SCIP_PARAMSETTING.OFF)
+    model.setHeuristics(SCIP_PARAMSETTING.OFF)
+    model.setSeparating(SCIP_PARAMSETTING.OFF)
+    # --------------------------------------------------------------------------
     
     num_items = instance['num_items']
     x = {i: model.addVar(vtype="B", name=f"x_{i}") for i in range(num_items)}
@@ -20,35 +29,48 @@ def get_scip_optimal_solution(instance_file):
     model.setObjective(sum(instance['values'][i] * x[i] for i in range(num_items)), "maximize")
     model.addCons(sum(instance['weights'][i] * x[i] for i in range(num_items)) <= instance['capacity'])
     
-    # Solve the problem
     model.optimize()
     
     optimal_profit = 0
+    node_count = 0
     if model.getStatus() == "optimal":
         optimal_profit = model.getObjVal()
+        # --- ADDED: Get the number of nodes SCIP explored ---
+        node_count = model.getNNodes()
         print(f"SCIP found a provably optimal solution with profit: {optimal_profit}")
+        print(f"Nodes explored by basic SCIP solver: {node_count}")
     else:
         print(f"SCIP could not find an optimal solution. Status: {model.getStatus()}")
         
-    return optimal_profit
+    return optimal_profit, node_count
 
 if __name__ == '__main__':
     INSTANCE_TO_TEST = 'knapsack_dataset/instance_0.pkl'
     
-    print(f"--- Validating solution for {INSTANCE_TO_TEST} ---")
+    # --- Run both solvers and compare ---
+    print("--- Solving with GCN-Guided Solver ---")
+    model = GCN(num_node_features=3)
+    model.load_state_dict(torch.load('gcn_knapsack_model_v2.pth', weights_only=True))
+    with open(INSTANCE_TO_TEST, 'rb') as f:
+        test_instance = pickle.load(f)
+    gcn_profit, gcn_nodes = gcn_guided_solve(test_instance, model)
+
+    print("\n--- Solving with SCIP Baseline Solver ---")
+    scip_profit, scip_nodes = get_scip_baseline_solution(INSTANCE_TO_TEST)
     
-    # Get the ground truth from SCIP
-    scip_profit = get_scip_optimal_solution(INSTANCE_TO_TEST)
-    
-    # The result from your custom solver
-    gcn_profit = 277
-    
-    print("\n--- Comparison ---")
-    print(f"GCN-Guided Solver Profit: {gcn_profit}")
-    print(f"SCIP Optimal Profit:      {scip_profit}")
-    
+    print("\n" + "="*25)
+    print("      FINAL COMPARISON")
+    print("="*25)
+    print(f"GCN Solver Result:  Profit={gcn_profit}, Nodes={gcn_nodes}")
+    print(f"SCIP Solver Result: Profit={scip_profit}, Nodes={scip_nodes}")
+    print("="*25)
+
     if gcn_profit == scip_profit:
-        print("\nSUCCESS! The GCN-guided solver found the provably optimal solution.")
+        if gcn_nodes < scip_nodes:
+            print("\nSUCCESS! The GCN solver found the optimal solution and was MORE EFFICIENT.")
+        elif gcn_nodes == scip_nodes:
+            print("\nSUCCESS! The GCN solver found the optimal solution with similar efficiency.")
+        else:
+            print("\nSUCCESS! The GCN solver found the optimal solution but was LESS EFFICIENT.")
     else:
-        print(f"\nNOTE: The GCN-guided solver found a good, but suboptimal, solution.")
-        print(f"Optimality Gap: {((scip_profit - gcn_profit) / scip_profit * 100):.2f}%")
+        print("\nNOTE: The GCN solver did not find the optimal solution.")
