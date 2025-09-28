@@ -1,6 +1,6 @@
 # Machine Learning for Combinatorial Optimization: A GCN-Guided Knapsack Solver
 
-This project demonstrates an end-to-end pipeline for using Machine Learning—specifically, a Graph Convolutional Network (GCN)—to guide a classical optimization algorithm, Branch and Bound, in solving the 0/1 Knapsack Problem.
+This project demonstrates an end-to-end pipeline for using Machine Learning in branching. Specifically, a Graph Convolutional Network (GCN) to guide a classical optimization algorithm, Branch and Bound, in solving the 0/1 Knapsack Problem.
 
 The core idea is to train a GCN to act as an intelligent heuristic for making branching decisions within the solver. We validate our custom solver by comparing its correctness and efficiency against the state-of-the-art open-source solver, SCIP.
 
