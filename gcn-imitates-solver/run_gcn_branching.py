@@ -36,19 +36,15 @@ def state_to_graph(instance, lp_solution_values):
     edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
     return Data(x=node_features, edge_index=edge_index)
 
-# --- The Custom SCIP Branching Rule with the FIX ---
+# --- The Custom SCIP Branching Rule with the FINAL FIX ---
 class GCNBranchingRule(Branchrule):
-    # --- FIX #1: Renamed 'model' to 'gcn_model' in the constructor ---
     def __init__(self, gcn_model, variables, instance):
-        # --- FIX #2: Store our GCN in a different variable name ---
         self.gcn_model = gcn_model
-        self.variables = variables
+        self.variables = variables # The original list of variables, in order
         self.instance = instance
         self.gcn_model.eval()
 
     def branchexeclp(self, allowaddcons):
-        # PySCIPOpt automatically provides `self.model` which is the SCIP solver.
-        # We can now use it without conflict.
         candidates, *_ = self.model.getLPBranchCands()
         if not candidates:
             return {'result': SCIP_RESULT.DIDNOTRUN}
@@ -58,22 +54,25 @@ class GCNBranchingRule(Branchrule):
         if graph is None:
             return {'result': SCIP_RESULT.DIDNOTRUN}
 
-        # --- FIX #3: Use the correctly named GCN model ---
         with torch.no_grad():
             scores = self.gcn_model(graph)
 
         best_candidate = None
         max_score = -float('inf')
-        var_to_idx = {var.name: i for i, var in enumerate(self.variables)}
         
+        # --- THIS IS THE FINAL, ROBUST FIX ---
+        # We no longer use a dictionary based on names.
+        # We get the original index of the variable directly.
         for cand_var in candidates:
-            var_idx = var_to_idx[cand_var.name]
+            # getIndex() provides the stable, original position of the variable.
+            var_idx = cand_var.getIndex()
+            
             if scores[var_idx] > max_score:
                 max_score = scores[var_idx]
                 best_candidate = cand_var
+        # ------------------------------------
 
         if best_candidate is not None:
-            # We use the SCIP model's method to branch
             self.model.branchVar(best_candidate)
             return {'result': SCIP_RESULT.BRANCHED}
         
@@ -98,7 +97,6 @@ if __name__ == '__main__':
     
     variables_list = [x[i] for i in range(num_items)]
     
-    # --- FIX #4: Pass the GCN model with the correct keyword 'gcn_model' ---
     branching_rule = GCNBranchingRule(gcn_model=gcn_model, variables=variables_list, instance=test_instance)
     
     scip.includeBranchrule(
