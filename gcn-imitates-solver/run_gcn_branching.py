@@ -40,8 +40,9 @@ def state_to_graph(instance, lp_solution_values):
 class GCNBranchingRule(Branchrule):
     def __init__(self, gcn_model, variables, instance):
         self.gcn_model = gcn_model
-        self.variables = variables # The original list of variables, in order
+        self.variables = variables
         self.instance = instance
+        self.num_items = instance['num_items']
         self.gcn_model.eval()
 
     def branchexeclp(self, allowaddcons):
@@ -60,17 +61,17 @@ class GCNBranchingRule(Branchrule):
         best_candidate = None
         max_score = -float('inf')
         
-        # --- THIS IS THE FINAL, ROBUST FIX ---
-        # We no longer use a dictionary based on names.
-        # We get the original index of the variable directly.
         for cand_var in candidates:
-            # getIndex() provides the stable, original position of the variable.
             var_idx = cand_var.getIndex()
             
-            if scores[var_idx] > max_score:
-                max_score = scores[var_idx]
-                best_candidate = cand_var
-        # ------------------------------------
+            # --- THIS IS THE FINAL, ROBUST FIX ---
+            # Only consider variables that are part of our original problem,
+            # ignoring any auxiliary/slack variables SCIP might have created.
+            if var_idx < self.num_items:
+                if scores[var_idx] > max_score:
+                    max_score = scores[var_idx]
+                    best_candidate = cand_var
+            # ------------------------------------
 
         if best_candidate is not None:
             self.model.branchVar(best_candidate)
